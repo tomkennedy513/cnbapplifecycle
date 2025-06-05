@@ -2,7 +2,7 @@ module code.cloudfoundry.org/cnbapplifecycle
 
 go 1.24
 
-toolchain go1.24.2
+toolchain go1.24.3
 
 tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 

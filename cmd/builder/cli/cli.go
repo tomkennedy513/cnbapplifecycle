@@ -17,6 +17,7 @@ import (
 	"code.cloudfoundry.org/cnbapplifecycle/pkg/keychain"
 	"code.cloudfoundry.org/cnbapplifecycle/pkg/log"
 	"code.cloudfoundry.org/cnbapplifecycle/pkg/staging"
+	"code.cloudfoundry.org/cnbapplifecycle/pkg/vcap"
 	"github.com/spf13/cobra"
 
 	"github.com/buildpacks/pack/pkg/blob"
@@ -117,6 +118,11 @@ var builderCmd = &cobra.Command{
 				logger.Errorf("failed to create %q, error: %s\n", dir, err.Error())
 				return errors.ErrGenericBuild
 			}
+		}
+
+		if err := vcap.TranslateVcapServices(filepath.Join(platformDir, "bindings")); err != nil {
+			logger.Errorf("failed to translate service bindings, error: %s\n", err.Error())
+			return errors.ErrGenericBuild
 		}
 
 		if err := staging.CreateEnvFiles(platformDir, envVarNames); err != nil {

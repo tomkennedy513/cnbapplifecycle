@@ -19,6 +19,7 @@ import (
 	"code.cloudfoundry.org/cnbapplifecycle/pkg/credhub"
 	"code.cloudfoundry.org/cnbapplifecycle/pkg/errors"
 	"code.cloudfoundry.org/cnbapplifecycle/pkg/log"
+	"code.cloudfoundry.org/cnbapplifecycle/pkg/vcap"
 )
 
 const (
@@ -91,6 +92,16 @@ func Launch(osArgs []string, theLauncher TheLauncher) error {
 	if err := credhub.InterpolateServiceRefs(credhubConnectionAttempts, credhubRetryDelay); err != nil {
 		logger.Error(err.Error())
 		return errors.ErrLaunching
+	}
+
+	bindingDir, err := os.MkdirTemp("", "bindings")
+	if err != nil {
+		logger.Errorf("failed to create binding dir, error: %s\n", err.Error())
+	}
+
+	if err := vcap.TranslateVcapServices(bindingDir); err != nil {
+		logger.Errorf("failed to translate service bindings, error: %s\n", err.Error())
+		return errors.ErrGenericBuild
 	}
 
 	var self string
