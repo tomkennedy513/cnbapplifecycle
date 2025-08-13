@@ -54,6 +54,7 @@ func InterpolateServiceRefs(maxConnectionAttempts int, retryDelay time.Duration)
 	if err := os.Setenv("VCAP_SERVICES", interpolatedServices); err != nil {
 		return fmt.Errorf("unable to update VCAP_SERVICES with interpolated credhub references: %v", err)
 	}
+
 	return nil
 }
 

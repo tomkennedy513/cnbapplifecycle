@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 	builderCli "code.cloudfoundry.org/cnbapplifecycle/cmd/builder/cli"
 	"code.cloudfoundry.org/cnbapplifecycle/pkg/credhub"
+	"code.cloudfoundry.org/cnbapplifecycle/pkg/databaseuri"
 	"code.cloudfoundry.org/cnbapplifecycle/pkg/errors"
 	"code.cloudfoundry.org/cnbapplifecycle/pkg/log"
 )
@@ -91,6 +93,21 @@ func Launch(osArgs []string, theLauncher TheLauncher) error {
 	if err := credhub.InterpolateServiceRefs(credhubConnectionAttempts, credhubRetryDelay); err != nil {
 		logger.Error(err.Error())
 		return errors.ErrLaunching
+	}
+
+	if err := os.Unsetenv("VCAP_PLATFORM_OPTIONS"); err != nil {
+		logger.Error(fmt.Sprintf("unable to unset VCAP_PLATFORM_OPTIONS: %s", err.Error()))
+		return errors.ErrLaunching
+	}
+
+	url, err := databaseuri.GetDatabaseUriFromVcapServices([]byte(os.Getenv("VCAP_SERVICES")))
+	if err != nil {
+		logger.Errorf("failed getting database URI, error: %s\n", err.Error())
+		return errors.ErrLaunching
+	}
+
+	if url != "" {
+		os.Setenv("DATABASE_URL", url)
 	}
 
 	var self string
