@@ -15,16 +15,7 @@ type platformOptions struct {
 	CredhubURI string `json:"credhub-uri"`
 }
 
-func InterpolateServiceRefs(maxConnectionAttempts int, retryDelay time.Duration) error {
-	platformOptions, err := getPlatformOptions()
-	if err != nil {
-		return fmt.Errorf("unable to get platform options: %s", err)
-	}
-
-	if platformOptions.CredhubURI == "" {
-		return nil
-	}
-
+func InterpolateServiceRefsFromVcapServices(maxConnectionAttempts int, retryDelay time.Duration) error {
 	if os.Getenv("CREDHUB_SKIP_INTERPOLATION") != "" {
 		return nil
 	}
@@ -32,7 +23,7 @@ func InterpolateServiceRefs(maxConnectionAttempts int, retryDelay time.Duration)
 		return nil
 	}
 
-	ch, err := credhubClient(platformOptions.CredhubURI)
+	ch, err := newCredhubClient()
 	if err != nil {
 		return fmt.Errorf("unable to set up credhub client: %v", err)
 	}
@@ -57,6 +48,149 @@ func InterpolateServiceRefs(maxConnectionAttempts int, retryDelay time.Duration)
 	return nil
 }
 
+type Credentials struct {
+	CredhubRef string `json:"credhub-ref"`
+}
+
+type ServiceRef struct {
+	Credentials Credentials `json:"credentials"`
+}
+
+type ServicesMap map[string][]map[string]any
+
+func InterpolateServiceRefsFromFiles(maxConnectionAttempts int, retryDelay time.Duration, bindingRoot string) error {
+	if os.Getenv("CREDHUB_SKIP_INTERPOLATION") != "" {
+		return nil
+	}
+
+	servicesMap, err := getServicesMap(bindingRoot)
+	if err != nil {
+		return fmt.Errorf("unable to get services map: %v", err)
+	}
+
+	if len(servicesMap) == 0 {
+		return nil
+	}
+
+	ch, err := newCredhubClient()
+	if err != nil {
+		return fmt.Errorf("unable to set up credhub client: %v", err)
+	}
+
+	jsonString, err := json.Marshal(servicesMap)
+	if err != nil {
+		return fmt.Errorf("unable to marshal services map: %v", err)
+	}
+
+	var interpolatedServices string
+	for attempt := 1; attempt <= maxConnectionAttempts; attempt++ {
+		interpolatedServices, err = ch.InterpolateString(string(jsonString))
+		if err == nil {
+			break
+		}
+		fmt.Printf("Failed on attempt %v out of %v: Unable to interpolate credhub references: %v\n", attempt, maxConnectionAttempts, err)
+		time.Sleep(retryDelay)
+	}
+
+	if err != nil {
+		return fmt.Errorf("unable to interpolate credhub references: %v", err)
+	}
+
+	interpolatedServicesMap := ServicesMap{}
+	err = json.Unmarshal([]byte(interpolatedServices), &interpolatedServicesMap)
+	if err != nil {
+		return fmt.Errorf("unable to unmarshal interpolated services map: %v", err)
+	}
+
+	for serviceName, serviceList := range interpolatedServicesMap {
+		if len(serviceList) == 0 {
+			continue
+		}
+
+		bindingDir := filepath.Join(bindingRoot, serviceName)
+		serviceData := serviceList[0] // Each service should have one entry
+
+		for key, value := range serviceData {
+			filename := filepath.Join(bindingDir, key)
+
+			var content string
+			switch v := value.(type) {
+			case string:
+				content = v
+			default:
+				bytes, err := json.Marshal(v)
+				if err != nil {
+					return fmt.Errorf("unable to marshal value for %s/%s: %v", serviceName, key, err)
+				}
+				content = string(bytes)
+			}
+
+			if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
+				return fmt.Errorf("unable to write file %s: %v", filename, err)
+			}
+		}
+
+		credhubRefFile := filepath.Join(bindingDir, "credhub-ref")
+		if err := os.Remove(credhubRefFile); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("unable to remove credhub-ref file %s: %v", credhubRefFile, err)
+		}
+	}
+
+	return nil
+}
+
+func getServicesMap(bindingRoot string) (ServicesMap, error) {
+	info, err := os.Stat(bindingRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unable to get binding root: %v", err)
+	}
+
+	if !info.IsDir() {
+		return nil, fmt.Errorf("binding root is not a directory: %v", bindingRoot)
+	}
+
+	entries, err := os.ReadDir(bindingRoot)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read binding root: %v", err)
+	}
+
+	servicesMap := ServicesMap{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			ref, err := getCredhubRef(filepath.Join(bindingRoot, entry.Name(), "credhub-ref"))
+			if err != nil {
+				return nil, fmt.Errorf("unable to get credhub refs for service %s: %v", entry.Name(), err)
+			}
+			if ref == "" {
+				continue
+			}
+			servicesMap[entry.Name()] = []map[string]any{{"credhub-ref": ref}}
+		}
+	}
+
+	return servicesMap, nil
+}
+
+func getCredhubRef(filename string) (string, error) {
+	_, err := os.Stat(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("unable to get info for %s: %v", filename, err)
+	}
+
+	bytes, err := os.ReadFile(filename)
+	if err != nil {
+		return "", fmt.Errorf("unable to read %s: %v", filename, err)
+	}
+
+	return string(bytes), nil
+}
+
 func getPlatformOptions() (platformOptions, error) {
 	var platformOptions platformOptions
 	platformOptionString := os.Getenv("VCAP_PLATFORM_OPTIONS")
@@ -72,7 +206,16 @@ func getPlatformOptions() (platformOptions, error) {
 	return platformOptions, nil
 }
 
-func credhubClient(credhubURI string) (*api.CredHub, error) {
+func newCredhubClient() (*api.CredHub, error) {
+	platformOptions, err := getPlatformOptions()
+	if err != nil {
+		return nil, fmt.Errorf("unable to get platform options: %s", err)
+	}
+
+	if platformOptions.CredhubURI == "" {
+		return nil, fmt.Errorf("missing credhub URI")
+	}
+
 	instanceCertPath := os.Getenv("CF_INSTANCE_CERT")
 	instanceKeyPath := os.Getenv("CF_INSTANCE_KEY")
 	systemCertsPath := os.Getenv("CF_SYSTEM_CERT_PATH")
@@ -100,7 +243,7 @@ func credhubClient(credhubURI string) (*api.CredHub, error) {
 	}
 
 	return api.New(
-		credhubURI,
+		platformOptions.CredhubURI,
 		api.ClientCert(instanceCertPath, instanceKeyPath),
 		api.CaCerts(caCerts...),
 	)

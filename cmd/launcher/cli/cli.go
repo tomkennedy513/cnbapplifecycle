@@ -88,9 +88,16 @@ func Launch(osArgs []string, theLauncher TheLauncher) error {
 		return errors.ErrLaunching
 	}
 
-	if err := credhub.InterpolateServiceRefs(credhubConnectionAttempts, credhubRetryDelay); err != nil {
+	if err := credhub.InterpolateServiceRefsFromVcapServices(credhubConnectionAttempts, credhubRetryDelay); err != nil {
 		logger.Error(err.Error())
 		return errors.ErrLaunching
+	}
+
+	if bindingRoot, ok := os.LookupEnv("SERVICE_BINDING_ROOT"); ok {
+		if err := credhub.InterpolateServiceRefsFromFiles(credhubConnectionAttempts, credhubRetryDelay, bindingRoot); err != nil {
+			logger.Error(err.Error())
+			return errors.ErrLaunching
+		}
 	}
 
 	var self string

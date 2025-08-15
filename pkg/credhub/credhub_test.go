@@ -77,7 +77,7 @@ var _ = Describe("credhub", func() {
 		})
 
 		JustBeforeEach(func() {
-			err = credhub.InterpolateServiceRefs(maxConnectAttempts, retryDelay)
+			err = credhub.InterpolateServiceRefsFromVcapServices(maxConnectAttempts, retryDelay)
 		})
 
 		Context("when there are no credhub refs in VCAP_SERVICES and no TLS environment variables are present", func() {
